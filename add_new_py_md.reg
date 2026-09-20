@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+; .py を「新規作成」に追加
+[HKEY_CLASSES_ROOT\.py\ShellNew]
+"NullFile"=""
+
+; .md を「新規作成」に追加
+[HKEY_CLASSES_ROOT\.md\ShellNew]
+"NullFile"=""
