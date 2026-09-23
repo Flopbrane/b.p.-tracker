@@ -5,7 +5,12 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from analysis import filter_high_level_samples, filter_low_level_samples, make_mark_points
+from analysis import (
+    filter_high_level_samples,
+    filter_low_level_samples,
+    make_mark_points,
+    make_trigger_analysis_text,
+)
 from constants import COLUMN_LABELS, MEDICAL_DISCLAIMER, REPORTS_DIR
 
 
@@ -33,6 +38,16 @@ def _record_table(records: list[dict[str, Any]]) -> str:
         "st3L",
         "dizziness",
         "drinking_prev_night",
+        "water_amount",
+        "caffeine",
+        "sleep_quality",
+        "stress_level",
+        "pc_work_hours",
+        "outing",
+        "bathing",
+        "headache",
+        "neck_shoulder_jaw_tension",
+        "teeth_clenching",
         "memo",
     ]
     header = "".join(f"<th>{escape(COLUMN_LABELS[column])}</th>" for column in columns)
@@ -112,6 +127,9 @@ def export_medical_report(
 
   <h2>マークポイント</h2>
   {_mark_point_table(records)}
+
+  <h2>トリガー分析</h2>
+  <pre>{escape(make_trigger_analysis_text(records))}</pre>
 </body>
 </html>
 """

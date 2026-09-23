@@ -120,3 +120,139 @@ def filter_high_level_samples(records: list[dict[str, Any]]) -> list[dict[str, A
 
 def filter_low_level_samples(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [record for record in records if is_low_level_sample(record)]
+
+
+def _average_bp(records: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+    high_values = [int(record["wpH"]) for record in records if record.get("wpH") is not None]
+    low_values = [int(record["wpL"]) for record in records if record.get("wpL") is not None]
+    if not high_values or not low_values:
+        return None, None
+    return sum(high_values) / len(high_values), sum(low_values) / len(low_values)
+
+
+def _format_average(records: list[dict[str, Any]]) -> str:
+    high_average, low_average = _average_bp(records)
+    if high_average is None or low_average is None:
+        return "データ不足"
+    return f"平均 {high_average:.1f} / {low_average:.1f}（{len(records)}件）"
+
+
+def _judgement_from_difference(high_diff: float | None, low_diff: float | None) -> str:
+    if high_diff is None or low_diff is None:
+        return "データ不足"
+    if abs(high_diff) >= 10 or abs(low_diff) >= 5:
+        return "確認推奨"
+    return "通常範囲"
+
+
+def _compare_two_groups(
+    title: str,
+    true_label: str,
+    true_records: list[dict[str, Any]],
+    false_label: str,
+    false_records: list[dict[str, Any]],
+) -> list[str]:
+    true_high, true_low = _average_bp(true_records)
+    false_high, false_low = _average_bp(false_records)
+
+    lines = [f"【{title}】"]
+    lines.append(f"{true_label}: {_format_average(true_records)}")
+    lines.append(f"{false_label}: {_format_average(false_records)}")
+
+    if true_high is None or true_low is None or false_high is None or false_low is None:
+        lines.append("差分: データ不足")
+        lines.append("判定: データ不足")
+    else:
+        high_diff = true_high - false_high
+        low_diff = true_low - false_low
+        lines.append(f"差分: 収縮期 {high_diff:+.1f} / 拡張期 {low_diff:+.1f}")
+        lines.append(f"判定: {_judgement_from_difference(high_diff, low_diff)}")
+
+    lines.append("")
+    return lines
+
+
+def _group_by_text(records: list[dict[str, Any]], column: str, values: list[str]) -> list[str]:
+    lines: list[str] = []
+    for value in values:
+        group_records = [record for record in records if record.get(column) == value]
+        lines.append(f"- {value}: {_format_average(group_records)}")
+    return lines
+
+
+def _sleep_bucket(record: dict[str, Any]) -> str:
+    sleep_hours = record.get("sleep_hours")
+    if sleep_hours is None:
+        return "未入力"
+    hours = float(sleep_hours)
+    if hours < 6:
+        return "6時間未満"
+    if hours <= 8:
+        return "6〜8時間"
+    return "8時間超"
+
+
+def _concerta_bucket(record: dict[str, Any]) -> str:
+    value = str(record.get("concerta_time") or "").strip()
+    if not value:
+        return "未入力"
+    try:
+        hour = int(value.split(":")[0])
+    except (ValueError, IndexError):
+        return "時刻形式未確認"
+    if hour < 8:
+        return "8時前"
+    if hour < 10:
+        return "8〜10時"
+    return "10時以降"
+
+
+def _bucket_lines(records: list[dict[str, Any]], title: str, bucket_func: Any, order: list[str]) -> list[str]:
+    lines = [f"【{title}】"]
+    for bucket_name in order:
+        group_records = [record for record in records if bucket_func(record) == bucket_name]
+        lines.append(f"- {bucket_name}: {_format_average(group_records)}")
+    lines.append("")
+    return lines
+
+
+def make_trigger_analysis_text(records: list[dict[str, Any]]) -> str:
+    """条件別に朝の起床直後血圧を比較するための文章を作ります。"""
+    lines = [
+        "トリガー分析",
+        "この表示は医療診断ではありません。記録を見返し、医師に相談するための確認候補です。",
+        "",
+    ]
+
+    drinking_yes = [
+        record
+        for record in records
+        if record.get("drinking_prev_night") in {"少量", "多い"}
+    ]
+    drinking_no = [record for record in records if record.get("drinking_prev_night") == "無"]
+    lines.extend(_compare_two_groups("前夜飲酒", "前夜飲酒ありの日", drinking_yes, "前夜飲酒なしの日", drinking_no))
+
+    jardiance_yes = [record for record in records if record.get("jardiance") == "有"]
+    jardiance_no = [record for record in records if record.get("jardiance") == "無"]
+    lines.extend(_compare_two_groups("ジャディアンス服用", "服用ありの日", jardiance_yes, "服用なしの日", jardiance_no))
+
+    dizziness_yes = [
+        record
+        for record in records
+        if record.get("dizziness") in {"軽い", "強い"}
+    ]
+    dizziness_no = [record for record in records if record.get("dizziness") == "無"]
+    lines.extend(_compare_two_groups("立ちくらみ", "立ちくらみありの日", dizziness_yes, "立ちくらみなしの日", dizziness_no))
+
+    back_pain_yes = [record for record in records if record.get("back_pain") == "有"]
+    back_pain_no = [record for record in records if record.get("back_pain") == "無"]
+    lines.extend(_compare_two_groups("背部痛", "背部痛ありの日", back_pain_yes, "背部痛なしの日", back_pain_no))
+
+    lines.append("【水分量別】")
+    lines.extend(_group_by_text(records, "water_amount", ["少ない", "普通", "多い", "未入力"]))
+    lines.append("")
+
+    lines.extend(_bucket_lines(records, "睡眠時間別", _sleep_bucket, ["6時間未満", "6〜8時間", "8時間超", "未入力"]))
+    lines.extend(_bucket_lines(records, "コンサータ服用時刻別", _concerta_bucket, ["8時前", "8〜10時", "10時以降", "時刻形式未確認", "未入力"]))
+
+    return "\n".join(lines)

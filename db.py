@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from constants import DB_COLUMNS, DB_PATH, DATA_DIR, EDITABLE_COLUMNS
+from constants import DB_COLUMNS, DB_PATH, DATA_DIR, EDITABLE_COLUMNS, EXTRA_COLUMN_SQL_TYPES
 
 
 CREATE_TABLE_SQL = """
@@ -47,6 +47,21 @@ CREATE TABLE IF NOT EXISTS bp_records (
     back_pain TEXT,
     ear_face_pain TEXT,
 
+    meal_memo TEXT,
+    salt_memo TEXT,
+    caffeine TEXT,
+    exercise_movement TEXT,
+    outing TEXT,
+    bathing TEXT,
+    sleep_quality TEXT,
+    stress_level TEXT,
+    pc_work_hours REAL,
+    neck_shoulder_jaw_tension TEXT,
+    teeth_clenching TEXT,
+    headache TEXT,
+    back_pain_detail TEXT,
+    dizziness_detail TEXT,
+
     memo TEXT,
 
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -66,7 +81,19 @@ def initialize_database() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with get_connection() as connection:
         connection.execute(CREATE_TABLE_SQL)
+        _add_missing_columns(connection)
         connection.commit()
+
+
+def _add_missing_columns(connection: sqlite3.Connection) -> None:
+    """既存DBに、後から増えた任意入力列だけを安全に追加します。"""
+    existing_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(bp_records)").fetchall()
+    }
+    for column_name, sql_type in EXTRA_COLUMN_SQL_TYPES.items():
+        if column_name not in existing_columns:
+            connection.execute(f"ALTER TABLE bp_records ADD COLUMN {column_name} {sql_type}")
 
 
 def insert_record(record: dict[str, Any]) -> None:

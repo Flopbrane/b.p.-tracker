@@ -10,12 +10,15 @@ import analysis
 import db
 from constants import (
     APP_TITLE,
+    CAFFEINE_VALUES,
     COLUMN_LABELS,
     DIZZINESS_VALUES,
     DRINKING_VALUES,
     EDITABLE_COLUMNS,
     JARDIANCE_VALUES,
     MEDICAL_DISCLAIMER,
+    SLEEP_QUALITY_VALUES,
+    STRESS_VALUES,
     TREE_COLUMNS,
     WATER_VALUES,
     YES_NO_VALUES,
@@ -45,7 +48,7 @@ INTEGER_FIELDS = {
     "metgluco_count",
 }
 
-REAL_FIELDS = {"sleep_hours", "weight"}
+REAL_FIELDS = {"sleep_hours", "weight", "pc_work_hours"}
 REQUIRED_FIELDS = {"record_date"}
 COMBO_FIELDS = {
     "jardiance",
@@ -54,6 +57,14 @@ COMBO_FIELDS = {
     "water_amount",
     "back_pain",
     "ear_face_pain",
+    "caffeine",
+    "outing",
+    "bathing",
+    "sleep_quality",
+    "stress_level",
+    "neck_shoulder_jaw_tension",
+    "teeth_clenching",
+    "headache",
 }
 
 
@@ -124,6 +135,20 @@ class BloodPressureApp:
             ("water_amount", "水分量", "combo_water"),
             ("back_pain", "背部痛", "combo_yes_no"),
             ("ear_face_pain", "耳痛・顔面痛", "combo_yes_no"),
+            ("meal_memo", "食事メモ", "entry"),
+            ("salt_memo", "塩分メモ", "entry"),
+            ("caffeine", "カフェイン摂取", "combo_caffeine"),
+            ("exercise_movement", "運動・自転車移動", "entry"),
+            ("outing", "外出", "combo_yes_no"),
+            ("bathing", "入浴", "combo_yes_no"),
+            ("sleep_quality", "睡眠の質", "combo_sleep_quality"),
+            ("stress_level", "ストレス度", "combo_stress"),
+            ("pc_work_hours", "PC作業時間", "entry"),
+            ("neck_shoulder_jaw_tension", "首・肩・顎の張り", "combo_yes_no"),
+            ("teeth_clenching", "食いしばり自覚", "combo_yes_no"),
+            ("headache", "頭痛", "combo_yes_no"),
+            ("back_pain_detail", "背部痛の詳細", "entry"),
+            ("dizziness_detail", "めまい・ふらつき詳細", "entry"),
         ]
 
         for index, (column, label_text, widget_type) in enumerate(fields):
@@ -147,6 +172,8 @@ class BloodPressureApp:
                 variable.set("未入力")
 
             widget.grid(row=row, column=col + 1, sticky="ew", padx=6, pady=4)
+            if column == "record_date":
+                widget.bind("<Button-1>", self.choose_record_date)
 
         memo_row = (len(fields) + 3) // 4
         ttk.Label(parent, text="メモ").grid(row=memo_row, column=0, sticky="nw", padx=6, pady=4)
@@ -155,6 +182,7 @@ class BloodPressureApp:
 
         for column_index in range(8):
             parent.columnconfigure(column_index, weight=1)
+        self.vars["record_date"].set(date.today().isoformat())
 
     def _combo_values(self, widget_type: str) -> list[str]:
         if widget_type == "combo_jardiance":
@@ -165,6 +193,12 @@ class BloodPressureApp:
             return DRINKING_VALUES
         if widget_type == "combo_water":
             return WATER_VALUES
+        if widget_type == "combo_caffeine":
+            return CAFFEINE_VALUES
+        if widget_type == "combo_sleep_quality":
+            return SLEEP_QUALITY_VALUES
+        if widget_type == "combo_stress":
+            return STRESS_VALUES
         return YES_NO_VALUES
 
     def _create_buttons(self, parent: ttk.Frame) -> None:
@@ -183,6 +217,7 @@ class BloodPressureApp:
             ("Hi-Level Sample 抽出", self.show_high_level_samples),
             ("Low-Level Sample 抽出", self.show_low_level_samples),
             ("マークポイント表示", self.show_mark_points),
+            ("トリガー分析表示", self.show_trigger_analysis),
             ("診察用レポート出力", self.export_report),
         ]
 
@@ -316,6 +351,18 @@ class BloodPressureApp:
             return None
         return start_date, end_date
 
+    def choose_record_date(self, event: tk.Event | None = None) -> str:
+        current_value = self.vars["record_date"].get().strip()
+        try:
+            initial_date = date.fromisoformat(current_value) if current_value else date.today()
+        except ValueError:
+            initial_date = date.today()
+
+        selected_date = ask_date(self.root, title="記録日を選択", initial_date=initial_date)
+        if selected_date:
+            self.vars["record_date"].set(selected_date)
+        return "break"
+
     def load_selected_record(self) -> None:
         record_id = self._get_selected_record_id()
         if record_id is None:
@@ -433,6 +480,13 @@ class BloodPressureApp:
             lines.append("")
         self._show_text_window(title, "\n".join(lines))
 
+    def show_trigger_analysis(self) -> None:
+        if not self.current_records:
+            messagebox.showwarning("トリガー分析", "分析対象データが存在しません。")
+            return
+        text = analysis.make_trigger_analysis_text(self.current_records)
+        self._show_text_window("トリガー分析", text)
+
     def export_report(self) -> None:
         records = db.fetch_records_for_csv(self.current_start_date, self.current_end_date)
         if not records:
@@ -473,6 +527,7 @@ class BloodPressureApp:
                 variable.set("未入力")
             else:
                 variable.set("")
+        self.vars["record_date"].set(date.today().isoformat())
         self.memo_text.delete("1.0", "end")
 
     def _get_selected_record_id(self) -> int | None:
