@@ -7,7 +7,9 @@ from tkinter import messagebox, ttk
 from typing import Any
 
 import analysis
+import backup
 import db
+import db_health
 from constants import (
     APP_TITLE,
     CAFFEINE_VALUES,
@@ -102,6 +104,7 @@ class BloodPressureApp:
         form_frame.pack(side="top", fill="x")
 
         self._create_form(form_frame)
+        self._create_input_aids(main_area)
         self._create_buttons(main_area)
         self._create_tree(main_area)
 
@@ -201,6 +204,37 @@ class BloodPressureApp:
             return STRESS_VALUES
         return YES_NO_VALUES
 
+    def _create_input_aids(self, parent: ttk.Frame) -> None:
+        aid_frame = ttk.LabelFrame(parent, text="入力補助")
+        aid_frame.pack(fill="x", pady=(8, 0))
+
+        ttk.Label(aid_frame, text="コンサータ").pack(side="left", padx=(6, 2))
+        for time_text in ["07:00", "07:30", "08:00", "08:30", "09:00"]:
+            ttk.Button(
+                aid_frame,
+                text=time_text,
+                command=lambda value=time_text: self.vars["concerta_time"].set(value),
+            ).pack(side="left", padx=2, pady=4)
+
+        ttk.Label(aid_frame, text="メトグルコ").pack(side="left", padx=(12, 2))
+        for count_text in ["0", "1", "2", "3"]:
+            ttk.Button(
+                aid_frame,
+                text=count_text,
+                command=lambda value=count_text: self.vars["metgluco_count"].set(value),
+            ).pack(side="left", padx=2, pady=4)
+
+        ttk.Button(aid_frame, text="前回一部コピー", command=self.copy_previous_partial_record).pack(
+            side="left",
+            padx=(12, 2),
+            pady=4,
+        )
+        ttk.Button(aid_frame, text="メモテンプレート追加", command=self.append_memo_template).pack(
+            side="left",
+            padx=2,
+            pady=4,
+        )
+
     def _create_buttons(self, parent: ttk.Frame) -> None:
         button_frame = ttk.Frame(parent)
         button_frame.pack(fill="x", pady=8)
@@ -219,12 +253,27 @@ class BloodPressureApp:
             ("マークポイント表示", self.show_mark_points),
             ("トリガー分析表示", self.show_trigger_analysis),
             ("診察用レポート出力", self.export_report),
+            ("バックアップ作成", self.create_backup),
+            ("DB整合性チェック", self.show_db_health),
         ]
 
-        for text, command in buttons:
-            ttk.Button(button_frame, text=text, command=command).pack(side="left", padx=4)
+        max_columns = 7
+        for index, (text, command) in enumerate(buttons):
+            row = index // max_columns
+            column = index % max_columns
+            ttk.Button(button_frame, text=text, command=command).grid(row=row, column=column, padx=4, pady=3, sticky="ew")
 
-        ttk.Label(button_frame, textvariable=self.status_var).pack(side="left", padx=12)
+        ttk.Label(button_frame, textvariable=self.status_var).grid(
+            row=(len(buttons) // max_columns) + 1,
+            column=0,
+            columnspan=max_columns,
+            sticky="w",
+            padx=4,
+            pady=(4, 0),
+        )
+
+        for column in range(max_columns):
+            button_frame.columnconfigure(column, weight=1)
 
     def _create_tree(self, parent: ttk.Frame) -> None:
         tree_frame = ttk.LabelFrame(parent, text="保存済み記録")
@@ -284,6 +333,9 @@ class BloodPressureApp:
     def save_record(self) -> None:
         record = self._collect_form_data()
         if record is None:
+            return
+
+        if not self._confirm_record_action("保存", record):
             return
 
         try:
@@ -390,6 +442,9 @@ class BloodPressureApp:
 
         record = self._collect_form_data()
         if record is None:
+            return
+
+        if not self._confirm_record_action("更新", record):
             return
 
         try:
@@ -504,6 +559,72 @@ class BloodPressureApp:
             return
 
         messagebox.showinfo("レポート出力完了", f"診察用HTMLレポートを出力しました。\n{report_path}")
+
+    def create_backup(self) -> None:
+        try:
+            backup_path = backup.create_database_backup()
+        except OSError as error:
+            messagebox.showerror("バックアップエラー", f"バックアップに失敗しました。\n{error}")
+            return
+
+        messagebox.showinfo("バックアップ完了", f"DBをバックアップしました。\n{backup_path}")
+
+    def show_db_health(self) -> None:
+        report_text = db_health.build_health_check_report()
+        self._show_text_window("DB整合性チェック", report_text)
+
+    def copy_previous_partial_record(self) -> None:
+        records = db.fetch_all_records()
+        if not records:
+            messagebox.showinfo("前回一部コピー", "コピー元になる記録がありません。")
+            return
+
+        previous = records[0]
+        copy_columns = [
+            "wake_time",
+            "sleep_time",
+            "sleep_hours",
+            "concerta_time",
+            "jardiance",
+            "metgluco_count",
+            "water_amount",
+            "caffeine",
+            "sleep_quality",
+            "stress_level",
+        ]
+        for column in copy_columns:
+            value = previous.get(column)
+            if value is not None and column in self.vars:
+                self.vars[column].set(str(value))
+
+        messagebox.showinfo("前回一部コピー", "前回記録から一部の入力値をコピーしました。")
+
+    def append_memo_template(self) -> None:
+        template = "\n".join(
+            [
+                "立ちくらみ: ",
+                "背部痛: ",
+                "前夜飲酒: ",
+                "水分: ",
+                "睡眠: ",
+            ]
+        )
+        current_text = self.memo_text.get("1.0", "end").strip()
+        insert_text = f"\n{template}" if current_text else template
+        self.memo_text.insert("end", insert_text)
+
+    def _confirm_record_action(self, action_name: str, record: dict[str, Any]) -> bool:
+        summary = (
+            f"{action_name}しますか？\n\n"
+            f"記録日: {record.get('record_date')}\n"
+            f"起床直後: {record.get('wpH') or ''} / {record.get('wpL') or ''} "
+            f"pulse {record.get('wp_hr') or ''}\n"
+            f"座位: {record.get('spH') or ''} / {record.get('spL') or ''} "
+            f"pulse {record.get('sp_hr') or ''}\n"
+            f"排尿後: {record.get('auH') or ''} / {record.get('auL') or ''} "
+            f"pulse {record.get('au_hr') or ''}"
+        )
+        return messagebox.askyesno(f"{action_name}確認", summary)
 
     def _show_text_window(self, title: str, text: str) -> None:
         window = tk.Toplevel(self.root)
