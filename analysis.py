@@ -256,3 +256,99 @@ def make_trigger_analysis_text(records: list[dict[str, Any]]) -> str:
     lines.extend(_bucket_lines(records, "コンサータ服用時刻別", _concerta_bucket, ["8時前", "8〜10時", "10時以降", "時刻形式未確認", "未入力"]))
 
     return "\n".join(lines)
+
+
+def calculate_event_differences(record: dict[str, Any]) -> dict[str, int | None]:
+    """姿勢変化イベントの前後差分を計算します。"""
+    return {
+        "sys_diff": calculate_difference(record.get("before_sys"), record.get("after_sys")),
+        "dia_diff": calculate_difference(record.get("before_dia"), record.get("after_dia")),
+    }
+
+
+def judge_event_record(record: dict[str, Any]) -> str:
+    """姿勢変化イベントを診断ではない確認表示に変換します。"""
+    differences = calculate_event_differences(record)
+    sys_diff = differences["sys_diff"]
+    after_sys = record.get("after_sys")
+    symptom = str(record.get("symptom") or "")
+
+    labels: list[str] = []
+    if sys_diff is not None and sys_diff >= 20:
+        labels.append("確認推奨")
+
+    try:
+        if after_sys is not None and int(after_sys) < 90:
+            labels.append("低値注意候補")
+    except (TypeError, ValueError):
+        labels.append("データ確認")
+
+    if symptom and symptom not in {"なし", "未入力"}:
+        labels.append("症状あり")
+
+    if not labels:
+        return "通常範囲"
+    return " / ".join(labels)
+
+
+def make_event_summary(record: dict[str, Any]) -> dict[str, Any]:
+    """一覧表示用に、イベント記録へ差分と確認表示を足します。"""
+    differences = calculate_event_differences(record)
+    summary = dict(record)
+    summary["sys_diff"] = differences["sys_diff"]
+    summary["dia_diff"] = differences["dia_diff"]
+    summary["judgement"] = judge_event_record(record)
+    return summary
+
+
+def calculate_return_home_differences(record: dict[str, Any]) -> dict[str, int | None]:
+    """帰宅後データの収縮期差分を計算します。"""
+    return {
+        "diff_return_squat": calculate_difference(record.get("return_sys"), record.get("squat_sys")),
+        "diff_squat_stand_now": calculate_difference(record.get("squat_sys"), record.get("stand_now_sys")),
+        "diff_squat_stand_1min": calculate_difference(record.get("squat_sys"), record.get("stand_1min_sys")),
+        "diff_squat_stand_3min": calculate_difference(record.get("squat_sys"), record.get("stand_3min_sys")),
+    }
+
+
+def judge_return_home_record(record: dict[str, Any]) -> str:
+    """帰宅後データを診断ではない確認表示に変換します。"""
+    differences = calculate_return_home_differences(record)
+    labels: list[str] = []
+
+    if any(value is not None and value >= 20 for value in differences.values()):
+        labels.append("確認推奨")
+
+    low_check_columns = [
+        "return_sys",
+        "squat_sys",
+        "stand_now_sys",
+        "stand_1min_sys",
+        "stand_3min_sys",
+        "bedtime_sys",
+        "before_lunch_sys",
+        "after_lunch_sys",
+    ]
+    for column in low_check_columns:
+        value = record.get(column)
+        if value is None:
+            continue
+        try:
+            if int(value) < 90:
+                labels.append("低値注意候補")
+                break
+        except (TypeError, ValueError):
+            labels.append("データ確認")
+            break
+
+    if not labels:
+        return "通常範囲"
+    return " / ".join(labels)
+
+
+def make_return_home_summary(record: dict[str, Any]) -> dict[str, Any]:
+    """一覧表示用に、帰宅後データへ差分と確認表示を足します。"""
+    summary = dict(record)
+    summary.update(calculate_return_home_differences(record))
+    summary["judgement"] = judge_return_home_record(record)
+    return summary

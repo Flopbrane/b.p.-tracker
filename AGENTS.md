@@ -336,3 +336,55 @@ bp_tracker_backup_20260923_224500.sqlite3
 6. グラフ拡張
 7. Excel出力
 8. exe化
+
+---
+
+## 追記:
+
+### 姿勢変化イベント記録
+
+しゃがみ込み、立ち上がり、入浴後、運動後など、特定動作の前後で血圧が大きく変動する可能性があるため、通常の朝測定とは別に「姿勢変化イベント記録」を追加する。
+
+記録項目：
+
+- event_date
+- event_time
+- event_type
+  - 冷凍庫前しゃがみ込み
+  - 入浴後
+  - 自転車後
+  - 階段後
+  - 食後
+  - その他
+- before_sys
+- before_dia
+- before_pulse
+- after_sys
+- after_dia
+- after_pulse
+- after_1min_sys
+- after_1min_dia
+- after_1min_pulse
+- symptom
+  - なし
+  - 軽い立ちくらみ
+  - 強い立ちくらみ
+  - 背部痛
+  - 息切れ
+  - その他
+- memo
+
+自動計算：
+
+- 収縮期差分 = before_sys - after_sys
+- 拡張期差分 = before_dia - after_dia
+
+表示：
+
+- 収縮期差分が20mmHg以上なら「確認推奨」
+- 収縮期血圧が90mmHg未満なら「低値注意候補」
+- 症状がある場合は「症状あり」と表示
+
+注意：
+
+この機能は医療診断ではなく、医師に相談するための記録補助とする。

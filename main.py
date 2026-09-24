@@ -17,8 +17,17 @@ from constants import (
     DIZZINESS_VALUES,
     DRINKING_VALUES,
     EDITABLE_COLUMNS,
+    EVENT_COLUMN_LABELS,
+    EVENT_EDITABLE_COLUMNS,
+    EVENT_SYMPTOM_VALUES,
+    EVENT_TREE_COLUMNS,
+    EVENT_TYPE_VALUES,
     JARDIANCE_VALUES,
     MEDICAL_DISCLAIMER,
+    RETURN_HOME_ACTIVITY_VALUES,
+    RETURN_HOME_COLUMN_LABELS,
+    RETURN_HOME_EDITABLE_COLUMNS,
+    RETURN_HOME_TREE_COLUMNS,
     SLEEP_QUALITY_VALUES,
     STRESS_VALUES,
     TREE_COLUMNS,
@@ -252,6 +261,7 @@ class BloodPressureApp:
             ("Low-Level Sample 抽出", self.show_low_level_samples),
             ("マークポイント表示", self.show_mark_points),
             ("トリガー分析表示", self.show_trigger_analysis),
+            ("帰宅後データ", self.open_return_home_window),
             ("診察用レポート出力", self.export_report),
             ("バックアップ作成", self.create_backup),
             ("DB整合性チェック", self.show_db_health),
@@ -573,6 +583,12 @@ class BloodPressureApp:
         report_text = db_health.build_health_check_report()
         self._show_text_window("DB整合性チェック", report_text)
 
+    def open_event_window(self) -> None:
+        EventRecordWindow(self.root)
+
+    def open_return_home_window(self) -> None:
+        ReturnHomeRecordWindow(self.root)
+
     def copy_previous_partial_record(self) -> None:
         records = db.fetch_all_records()
         if not records:
@@ -670,6 +686,511 @@ def main() -> None:
     root = tk.Tk()
     BloodPressureApp(root)
     root.mainloop()
+
+
+class EventRecordWindow:
+    def __init__(self, parent: tk.Misc) -> None:
+        self.window = tk.Toplevel(parent)
+        self.window.title("姿勢変化イベント記録")
+        self.window.geometry("1180x680")
+        self.vars: dict[str, tk.StringVar] = {}
+        self.memo_text: tk.Text
+        self.tree: ttk.Treeview
+
+        self._create_widgets()
+        self.clear_form()
+        self.load_events()
+
+    def _create_widgets(self) -> None:
+        notice = ttk.Label(
+            self.window,
+            text="この記録は医療診断ではありません。しゃがみ込み、立ち上がり、入浴後などの前後差を医師に相談するための補助記録です。",
+            foreground="#7a2d00",
+            wraplength=1120,
+            justify="left",
+        )
+        notice.pack(fill="x", padx=10, pady=(10, 6))
+
+        form_frame = ttk.LabelFrame(self.window, text="イベント入力")
+        form_frame.pack(fill="x", padx=10, pady=6)
+
+        fields = [
+            ("event_date", "日付", "entry"),
+            ("event_time", "時刻", "entry"),
+            ("event_type", "イベント", "combo_event_type"),
+            ("symptom", "症状", "combo_symptom"),
+            ("before_sys", "前 H", "entry"),
+            ("before_dia", "前 L", "entry"),
+            ("before_pulse", "前 pulse", "entry"),
+            ("after_sys", "後 H", "entry"),
+            ("after_dia", "後 L", "entry"),
+            ("after_pulse", "後 pulse", "entry"),
+            ("after_1min_sys", "1分後 H", "entry"),
+            ("after_1min_dia", "1分後 L", "entry"),
+            ("after_1min_pulse", "1分後 pulse", "entry"),
+        ]
+
+        for index, (column, label_text, widget_type) in enumerate(fields):
+            row = index // 4
+            grid_column = (index % 4) * 2
+            ttk.Label(form_frame, text=label_text).grid(row=row, column=grid_column, sticky="w", padx=6, pady=4)
+            variable = tk.StringVar()
+            self.vars[column] = variable
+            if widget_type == "combo_event_type":
+                widget = ttk.Combobox(form_frame, textvariable=variable, values=EVENT_TYPE_VALUES, state="readonly", width=18)
+            elif widget_type == "combo_symptom":
+                widget = ttk.Combobox(form_frame, textvariable=variable, values=EVENT_SYMPTOM_VALUES, state="readonly", width=18)
+            else:
+                widget = ttk.Entry(form_frame, textvariable=variable, width=20)
+            widget.grid(row=row, column=grid_column + 1, sticky="ew", padx=6, pady=4)
+            if column == "event_date":
+                widget.bind("<Button-1>", self.choose_event_date)
+
+        memo_row = (len(fields) + 3) // 4
+        ttk.Label(form_frame, text="メモ").grid(row=memo_row, column=0, sticky="nw", padx=6, pady=4)
+        self.memo_text = tk.Text(form_frame, height=3, width=80)
+        self.memo_text.grid(row=memo_row, column=1, columnspan=7, sticky="ew", padx=6, pady=4)
+
+        for column in range(8):
+            form_frame.columnconfigure(column, weight=1)
+
+        button_frame = ttk.Frame(self.window)
+        button_frame.pack(fill="x", padx=10, pady=6)
+        ttk.Button(button_frame, text="イベント保存", command=self.save_event).pack(side="left", padx=4)
+        ttk.Button(button_frame, text="選択イベント削除", command=self.delete_selected_event).pack(side="left", padx=4)
+        ttk.Button(button_frame, text="再読み込み", command=self.load_events).pack(side="left", padx=4)
+        ttk.Button(button_frame, text="入力クリア", command=self.clear_form).pack(side="left", padx=4)
+
+        tree_frame = ttk.LabelFrame(self.window, text="イベント一覧")
+        tree_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.tree = ttk.Treeview(tree_frame, columns=EVENT_TREE_COLUMNS, show="headings", height=12)
+        y_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        x_scroll = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+        for column in EVENT_TREE_COLUMNS:
+            self.tree.heading(column, text=EVENT_COLUMN_LABELS[column])
+            width = 90
+            if column in {"event_type", "judgement", "memo"}:
+                width = 180
+            self.tree.column(column, width=width, anchor="center")
+
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+
+    def choose_event_date(self, event: tk.Event | None = None) -> str:
+        current_value = self.vars["event_date"].get().strip()
+        try:
+            initial_date = date.fromisoformat(current_value) if current_value else date.today()
+        except ValueError:
+            initial_date = date.today()
+        selected_date = ask_date(self.window, title="イベント日を選択", initial_date=initial_date)
+        if selected_date:
+            self.vars["event_date"].set(selected_date)
+        return "break"
+
+    def _collect_event_data(self) -> dict[str, Any] | None:
+        record: dict[str, Any] = {}
+        integer_columns = {
+            "before_sys",
+            "before_dia",
+            "before_pulse",
+            "after_sys",
+            "after_dia",
+            "after_pulse",
+            "after_1min_sys",
+            "after_1min_dia",
+            "after_1min_pulse",
+        }
+
+        for column in EVENT_EDITABLE_COLUMNS:
+            if column == "memo":
+                value = self.memo_text.get("1.0", "end").strip()
+            else:
+                value = self.vars[column].get().strip()
+
+            if column == "event_date" and not value:
+                messagebox.showerror("入力エラー", "イベント日が未入力です。", parent=self.window)
+                return None
+
+            if value == "":
+                record[column] = None
+                continue
+
+            if column in integer_columns:
+                try:
+                    record[column] = int(value)
+                except ValueError:
+                    messagebox.showerror("入力エラー", f"{EVENT_COLUMN_LABELS[column]} には数字を入力してください。", parent=self.window)
+                    return None
+            else:
+                record[column] = value
+
+        return record
+
+    def save_event(self) -> None:
+        record = self._collect_event_data()
+        if record is None:
+            return
+
+        summary = analysis.make_event_summary(record)
+        message = (
+            "イベント記録を保存しますか？\n\n"
+            f"日付: {record.get('event_date')}\n"
+            f"イベント: {record.get('event_type') or ''}\n"
+            f"H差分: {summary.get('sys_diff') if summary.get('sys_diff') is not None else 'データ不足'}\n"
+            f"確認表示: {summary.get('judgement')}"
+        )
+        if not messagebox.askyesno("保存確認", message, parent=self.window):
+            return
+
+        try:
+            db.insert_event_record(record)
+        except sqlite3.Error as error:
+            messagebox.showerror("保存エラー", f"イベント記録の保存に失敗しました。\n{error}", parent=self.window)
+            return
+
+        messagebox.showinfo("保存完了", "イベント記録を保存しました。", parent=self.window)
+        self.clear_form()
+        self.load_events()
+
+    def load_events(self) -> None:
+        for item_id in self.tree.get_children():
+            self.tree.delete(item_id)
+
+        try:
+            records = db.fetch_all_event_records()
+        except sqlite3.Error as error:
+            messagebox.showerror("読み込みエラー", f"イベント記録の読み込みに失敗しました。\n{error}", parent=self.window)
+            return
+
+        for record in records:
+            summary = analysis.make_event_summary(record)
+            values = [summary.get(column) if summary.get(column) is not None else "" for column in EVENT_TREE_COLUMNS]
+            self.tree.insert("", "end", values=values)
+
+    def delete_selected_event(self) -> None:
+        selected_items = self.tree.selection()
+        if not selected_items:
+            messagebox.showwarning("削除エラー", "削除対象のイベントを選択してください。", parent=self.window)
+            return
+
+        values = self.tree.item(selected_items[0], "values")
+        if not values:
+            return
+
+        record_id = int(values[0])
+        if not messagebox.askyesno("削除確認", "選択したイベント記録を削除しますか？", parent=self.window):
+            return
+
+        try:
+            db.delete_event_record(record_id)
+        except sqlite3.Error as error:
+            messagebox.showerror("削除エラー", f"イベント記録の削除に失敗しました。\n{error}", parent=self.window)
+            return
+
+        self.load_events()
+
+    def clear_form(self) -> None:
+        for column, variable in self.vars.items():
+            if column == "event_date":
+                variable.set(date.today().isoformat())
+            elif column == "event_type":
+                variable.set(EVENT_TYPE_VALUES[0])
+            elif column == "symptom":
+                variable.set("なし")
+            else:
+                variable.set("")
+        self.memo_text.delete("1.0", "end")
+
+
+class ReturnHomeRecordWindow:
+    def __init__(self, parent: tk.Misc) -> None:
+        self.window = tk.Toplevel(parent)
+        self.window.title("帰宅後データ記録")
+        self.window.geometry("1280x760")
+        self.vars: dict[str, tk.StringVar] = {}
+        self.memo_text: tk.Text
+        self.tree: ttk.Treeview
+
+        self._create_widgets()
+        self.clear_form()
+        self.load_records()
+
+    def _create_widgets(self) -> None:
+        notice = ttk.Label(
+            self.window,
+            text="この記録は医療診断ではありません。帰宅後のしゃがみ込み・立ち上がり前後差を、医師に相談するための補助記録として保存します。",
+            foreground="#7a2d00",
+            wraplength=1220,
+            justify="left",
+        )
+        notice.pack(fill="x", padx=10, pady=(10, 6))
+
+        form_frame = ttk.LabelFrame(self.window, text="帰宅後データ入力")
+        form_frame.pack(fill="x", padx=10, pady=6)
+
+        fields = [
+            ("record_date", "日付", "entry"),
+            ("weekday", "曜日", "readonly"),
+            ("activity", "活動内容", "combo_activity"),
+            ("return_time", "帰宅時間", "entry"),
+            ("return_sys", "帰宅時 H", "entry"),
+            ("return_dia", "帰宅時 L", "entry"),
+            ("return_pulse", "帰宅時 hr", "entry"),
+            ("squat_sys", "しゃがみ込み H", "entry"),
+            ("squat_dia", "しゃがみ込み L", "entry"),
+            ("squat_pulse", "しゃがみ込み hr", "entry"),
+            ("stand_now_sys", "立ち上がり直後 H", "entry"),
+            ("stand_now_dia", "立ち上がり直後 L", "entry"),
+            ("stand_now_pulse", "立ち上がり直後 hr", "entry"),
+            ("stand_1min_sys", "立ち上がり1分 H", "entry"),
+            ("stand_1min_dia", "立ち上がり1分 L", "entry"),
+            ("stand_1min_pulse", "立ち上がり1分 hr", "entry"),
+            ("stand_3min_sys", "立ち上がり3分 H", "entry"),
+            ("stand_3min_dia", "立ち上がり3分 L", "entry"),
+            ("stand_3min_pulse", "立ち上がり3分 hr", "entry"),
+            ("bedtime_sys", "就寝時 H", "entry"),
+            ("bedtime_dia", "就寝時 L", "entry"),
+            ("bedtime_pulse", "就寝時 hr", "entry"),
+            ("arrival_time", "到着時", "entry"),
+            ("before_lunch_sys", "昼食前 H", "entry"),
+            ("before_lunch_dia", "昼食前 L", "entry"),
+            ("before_lunch_pulse", "昼食前 hr", "entry"),
+            ("meal_content", "食事内容", "entry"),
+            ("after_lunch_sys", "昼食後 H", "entry"),
+            ("after_lunch_dia", "昼食後 L", "entry"),
+            ("after_lunch_pulse", "昼食後 hr", "entry"),
+        ]
+
+        for index, (column, label_text, widget_type) in enumerate(fields):
+            row = index // 4
+            grid_column = (index % 4) * 2
+            ttk.Label(form_frame, text=label_text).grid(row=row, column=grid_column, sticky="w", padx=6, pady=4)
+            variable = tk.StringVar()
+            self.vars[column] = variable
+
+            if widget_type == "combo_activity":
+                widget = ttk.Combobox(
+                    form_frame,
+                    textvariable=variable,
+                    values=RETURN_HOME_ACTIVITY_VALUES,
+                    state="readonly",
+                    width=18,
+                )
+            else:
+                state = "readonly" if widget_type == "readonly" else "normal"
+                widget = ttk.Entry(form_frame, textvariable=variable, width=20, state=state)
+
+            widget.grid(row=row, column=grid_column + 1, sticky="ew", padx=6, pady=4)
+            if column == "record_date":
+                widget.bind("<Button-1>", self.choose_record_date)
+                widget.bind("<FocusOut>", self.update_weekday_from_date)
+
+        memo_row = (len(fields) + 3) // 4
+        ttk.Label(form_frame, text="メモ").grid(row=memo_row, column=0, sticky="nw", padx=6, pady=4)
+        self.memo_text = tk.Text(form_frame, height=3, width=80)
+        self.memo_text.grid(row=memo_row, column=1, columnspan=7, sticky="ew", padx=6, pady=4)
+
+        for column in range(8):
+            form_frame.columnconfigure(column, weight=1)
+
+        button_frame = ttk.Frame(self.window)
+        button_frame.pack(fill="x", padx=10, pady=6)
+        ttk.Button(button_frame, text="帰宅後データ保存", command=self.save_record).pack(side="left", padx=4)
+        ttk.Button(button_frame, text="選択データ削除", command=self.delete_selected_record).pack(side="left", padx=4)
+        ttk.Button(button_frame, text="再読み込み", command=self.load_records).pack(side="left", padx=4)
+        ttk.Button(button_frame, text="入力クリア", command=self.clear_form).pack(side="left", padx=4)
+
+        tree_frame = ttk.LabelFrame(self.window, text="帰宅後データ一覧")
+        tree_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.tree = ttk.Treeview(tree_frame, columns=RETURN_HOME_TREE_COLUMNS, show="headings", height=12)
+        y_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        x_scroll = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+        for column in RETURN_HOME_TREE_COLUMNS:
+            self.tree.heading(column, text=RETURN_HOME_COLUMN_LABELS[column])
+            width = 95
+            if column in {"activity", "judgement"}:
+                width = 150
+            elif column == "memo":
+                width = 220
+            elif column.startswith("diff_"):
+                width = 145
+            self.tree.column(column, width=width, anchor="center")
+
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+
+    def choose_record_date(self, event: tk.Event | None = None) -> str:
+        current_value = self.vars["record_date"].get().strip()
+        try:
+            initial_date = date.fromisoformat(current_value) if current_value else date.today()
+        except ValueError:
+            initial_date = date.today()
+
+        selected_date = ask_date(self.window, title="帰宅後データの日付を選択", initial_date=initial_date)
+        if selected_date:
+            self.vars["record_date"].set(selected_date)
+            self.update_weekday_from_date()
+        return "break"
+
+    def update_weekday_from_date(self, event: tk.Event | None = None) -> None:
+        date_text = self.vars["record_date"].get().strip()
+        self.vars["weekday"].set(self._weekday_text(date_text))
+
+    def _weekday_text(self, date_text: str) -> str:
+        try:
+            weekday_index = date.fromisoformat(date_text).weekday()
+        except ValueError:
+            return ""
+        return ["月", "火", "水", "木", "金", "土", "日"][weekday_index]
+
+    def _collect_record_data(self) -> dict[str, Any] | None:
+        record: dict[str, Any] = {}
+        integer_columns = {
+            "return_sys",
+            "return_dia",
+            "return_pulse",
+            "squat_sys",
+            "squat_dia",
+            "squat_pulse",
+            "stand_now_sys",
+            "stand_now_dia",
+            "stand_now_pulse",
+            "stand_1min_sys",
+            "stand_1min_dia",
+            "stand_1min_pulse",
+            "stand_3min_sys",
+            "stand_3min_dia",
+            "stand_3min_pulse",
+            "bedtime_sys",
+            "bedtime_dia",
+            "bedtime_pulse",
+            "before_lunch_sys",
+            "before_lunch_dia",
+            "before_lunch_pulse",
+            "after_lunch_sys",
+            "after_lunch_dia",
+            "after_lunch_pulse",
+        }
+
+        self.update_weekday_from_date()
+        for column in RETURN_HOME_EDITABLE_COLUMNS:
+            if column == "memo":
+                value = self.memo_text.get("1.0", "end").strip()
+            else:
+                value = self.vars[column].get().strip()
+
+            if column == "record_date" and not value:
+                messagebox.showerror("入力エラー", "日付が未入力です。", parent=self.window)
+                return None
+
+            if value == "":
+                record[column] = None
+                continue
+
+            if column in integer_columns:
+                try:
+                    record[column] = int(value)
+                except ValueError:
+                    messagebox.showerror("入力エラー", f"{RETURN_HOME_COLUMN_LABELS[column]} には数字を入力してください。", parent=self.window)
+                    return None
+            else:
+                record[column] = value
+
+        return record
+
+    def save_record(self) -> None:
+        record = self._collect_record_data()
+        if record is None:
+            return
+
+        summary = analysis.make_return_home_summary(record)
+        message = (
+            "帰宅後データを保存しますか？\n\n"
+            f"日付: {record.get('record_date')}（{record.get('weekday') or ''}）\n"
+            f"活動内容: {record.get('activity') or ''}\n"
+            f"帰宅時H - しゃがみ込みH: {self._value_or_data_shortage(summary.get('diff_return_squat'))}\n"
+            f"しゃがみ込みH - 立ち上がり直後H: {self._value_or_data_shortage(summary.get('diff_squat_stand_now'))}\n"
+            f"しゃがみ込みH - 立ち上がり1分H: {self._value_or_data_shortage(summary.get('diff_squat_stand_1min'))}\n"
+            f"しゃがみ込みH - 立ち上がり3分H: {self._value_or_data_shortage(summary.get('diff_squat_stand_3min'))}\n"
+            f"確認表示: {summary.get('judgement')}"
+        )
+        if not messagebox.askyesno("保存確認", message, parent=self.window):
+            return
+
+        try:
+            db.insert_return_home_record(record)
+        except sqlite3.Error as error:
+            messagebox.showerror("保存エラー", f"帰宅後データの保存に失敗しました。\n{error}", parent=self.window)
+            return
+
+        messagebox.showinfo("保存完了", "帰宅後データを保存しました。", parent=self.window)
+        self.clear_form()
+        self.load_records()
+
+    def _value_or_data_shortage(self, value: Any) -> str:
+        if value is None:
+            return "データ不足"
+        return f"{value} mmHg"
+
+    def load_records(self) -> None:
+        for item_id in self.tree.get_children():
+            self.tree.delete(item_id)
+
+        try:
+            records = db.fetch_all_return_home_records()
+        except sqlite3.Error as error:
+            messagebox.showerror("読み込みエラー", f"帰宅後データの読み込みに失敗しました。\n{error}", parent=self.window)
+            return
+
+        for record in records:
+            summary = analysis.make_return_home_summary(record)
+            values = [summary.get(column) if summary.get(column) is not None else "" for column in RETURN_HOME_TREE_COLUMNS]
+            self.tree.insert("", "end", values=values)
+
+    def delete_selected_record(self) -> None:
+        selected_items = self.tree.selection()
+        if not selected_items:
+            messagebox.showwarning("削除エラー", "削除対象の帰宅後データを選択してください。", parent=self.window)
+            return
+
+        values = self.tree.item(selected_items[0], "values")
+        if not values:
+            return
+
+        record_id = int(values[0])
+        if not messagebox.askyesno("削除確認", "選択した帰宅後データを削除しますか？", parent=self.window):
+            return
+
+        try:
+            db.delete_return_home_record(record_id)
+        except sqlite3.Error as error:
+            messagebox.showerror("削除エラー", f"帰宅後データの削除に失敗しました。\n{error}", parent=self.window)
+            return
+
+        self.load_records()
+
+    def clear_form(self) -> None:
+        today_text = date.today().isoformat()
+        for column, variable in self.vars.items():
+            if column == "record_date":
+                variable.set(today_text)
+            elif column == "weekday":
+                variable.set(self._weekday_text(today_text))
+            elif column == "activity":
+                variable.set(RETURN_HOME_ACTIVITY_VALUES[0])
+            else:
+                variable.set("")
+        self.memo_text.delete("1.0", "end")
 
 
 if __name__ == "__main__":

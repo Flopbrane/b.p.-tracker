@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
+*.cpython-312.pyc
 
 # Virtual environments
 .venv/
@@ -39,6 +40,7 @@ sample.txt
 # Logs
 *.log
 *.ps1
+*.sqlite3
 # OS / editor
 .DS_Store
 Thumbs.db

@@ -37,6 +37,20 @@ def _table_exists(connection: sqlite3.Connection) -> bool:
     return row is not None
 
 
+def _event_table_exists(connection: sqlite3.Connection) -> bool:
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'bp_event_records'"
+    ).fetchone()
+    return row is not None
+
+
+def _return_home_table_exists(connection: sqlite3.Connection) -> bool:
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'bp_return_home_records'"
+    ).fetchone()
+    return row is not None
+
+
 def _find_missing_columns(connection: sqlite3.Connection) -> list[str]:
     rows = connection.execute("PRAGMA table_info(bp_records)").fetchall()
     existing_columns = {row["name"] for row in rows}
@@ -96,8 +110,12 @@ def build_health_check_report() -> str:
 
     with connection:
         table_ok = _table_exists(connection)
+        event_table_ok = _event_table_exists(connection)
+        return_home_table_ok = _return_home_table_exists(connection)
         lines.append(f"DB接続: OK")
         lines.append(f"テーブル: {_format_ok(table_ok)}")
+        lines.append(f"イベントテーブル: {_format_ok(event_table_ok)}")
+        lines.append(f"帰宅後データテーブル: {_format_ok(return_home_table_ok)}")
         if not table_ok:
             return "\n".join(lines)
 
@@ -112,6 +130,8 @@ def build_health_check_report() -> str:
             lines.append(f"- {duplicate['record_date']}: {duplicate['count']}件")
 
     records = db.fetch_all_records()
+    event_records = db.fetch_all_event_records() if event_table_ok else []
+    return_home_records = db.fetch_all_return_home_records() if return_home_table_ok else []
     unusual_values = _find_unusual_values(records)
     sparse_records = _find_sparse_records(records)
 
@@ -125,4 +145,6 @@ def build_health_check_report() -> str:
 
     lines.append("")
     lines.append(f"確認対象レコード数: {len(records)}件")
+    lines.append(f"イベント記録数: {len(event_records)}件")
+    lines.append(f"帰宅後データ記録数: {len(return_home_records)}件")
     return "\n".join(lines)
